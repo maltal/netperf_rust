@@ -1,0 +1,15 @@
+[package]
+name = "rust_netperf"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+socket2 = "0.6.1"
+
+[[bin]]
+name = "netserver"
+path = "src/bin/rust_netserver.rs"
+
+[[bin]]
+name = "netperf"
+path = "src/bin/rust_netperf.rs"
