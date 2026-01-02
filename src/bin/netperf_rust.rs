@@ -18,26 +18,30 @@ fn main() -> std::io::Result<()> {
 }
 
 fn print_usage() {
-    println!("Usage: netperf_rust [options]");
-    println!("Options:");
+    println!("Usage: netperf_rust [global options] -- [test-specific options]");
+    println!("\nGlobal options:");
     println!("  -H <host>       Remote host to connect to (default: localhost)");
     println!("  -l <duration>   Test duration in seconds (default: 10)");
     println!("  -t <type>       Test type: TCP_STREAM, TCP_RR, UDP_STREAM, UDP_RR, TCP_MAERTS, TCP_CRR, TCP_CC (default: TCP_STREAM)");
-    println!("  -m <size>       Message size for stream tests (default: 32768)");
-    println!("  -r <req,res>    Request and response sizes for RR tests (default: 1,1)");
-    println!("  -s <send,recv>  Local send and receive buffer sizes");
-    println!("  -S <send,recv>  Remote send and receive buffer sizes");
-    println!("  -D              Set TCP_NODELAY (default: false)");
     println!("  -4              Use IPv4");
     println!("  -6              Use IPv6");
+    println!("  -p <port>       Port for the control connection (default: 12865)");
     println!("  -V              Print version");
     println!("  -h, --help      Print this help message");
+    println!("\nTest-specific options:");
+    println!("  -m <size>       Message size for stream tests (default: 32768)");
+    println!("  -M <size>       Remote receive buffer size for stream tests");
+    println!("  -r <req,res>    Request and response sizes for RR tests (default: 1,1)");
+    println!("  -s <send,recv>  Local send and receive socket buffer sizes");
+    println!("  -S <send,recv>  Remote send and receive socket buffer sizes");
+    println!("  -D              Set TCP_NODELAY (default: false)");
 }
 
 fn parse_args(args: Vec<String>) -> Option<TestOptions> {
     let mut host = "localhost".to_string();
     let mut duration = 10;
     let mut test_type = "TCP_STREAM".to_string();
+    let mut port = NETPERF_PORT;
     let mut msg_size = 32768;
     let mut request_size = 1;
     let mut response_size = 1;
@@ -47,44 +51,48 @@ fn parse_args(args: Vec<String>) -> Option<TestOptions> {
     let mut remote_send_buf = 0;
     let mut remote_recv_buf = 0;
     let mut no_delay = -1;
+    let mut remote_msg_size = 0;
 
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
+    let mut global_args = Vec::new();
+    let mut test_args = Vec::new();
+    let mut splitting = false;
+
+    for arg in args.into_iter().skip(1) {
+        if arg == "--" {
+            splitting = true;
+            continue;
+        }
+        if splitting {
+            test_args.push(arg);
+        } else {
+            global_args.push(arg);
+        }
+    }
+
+    // Parse global args
+    let mut i = 0;
+    while i < global_args.len() {
+        match global_args[i].as_str() {
             "-H" => {
-                if i + 1 < args.len() {
-                    host = args[i + 1].clone();
+                if i + 1 < global_args.len() {
+                    host = global_args[i + 1].split(',').next().unwrap_or("localhost").to_string();
+                    if global_args[i + 1].contains(',') {
+                        let f_part = global_args[i + 1].split(',').nth(1).unwrap_or("");
+                        if f_part == "4" || f_part == "inet" { ipfamily = NF_INET; }
+                        else if f_part == "6" || f_part == "inet6" { ipfamily = NF_INET6; }
+                    }
                     i += 2;
                 } else { i += 1; }
             }
             "-l" => {
-                if i + 1 < args.len() {
-                    duration = args[i + 1].parse().unwrap_or(10);
+                if i + 1 < global_args.len() {
+                    duration = global_args[i+1].parse().unwrap_or(10);
                     i += 2;
                 } else { i += 1; }
             }
             "-t" => {
-                if i + 1 < args.len() {
-                    test_type = args[i + 1].clone();
-                    i += 2;
-                } else { i += 1; }
-            }
-            "-m" => {
-                if i + 1 < args.len() {
-                    msg_size = args[i + 1].parse().unwrap_or(32768);
-                    i += 2;
-                } else { i += 1; }
-            }
-            "-r" => {
-                if i + 1 < args.len() {
-                    let parts: Vec<&str> = args[i + 1].split(',').collect();
-                    if parts.len() == 2 {
-                        request_size = parts[0].parse().unwrap_or(1);
-                        response_size = parts[1].parse().unwrap_or(1);
-                    } else {
-                        request_size = args[i + 1].parse().unwrap_or(1);
-                        response_size = request_size;
-                    }
+                if i + 1 < global_args.len() {
+                    test_type = global_args[i + 1].clone();
                     i += 2;
                 } else { i += 1; }
             }
@@ -96,35 +104,11 @@ fn parse_args(args: Vec<String>) -> Option<TestOptions> {
                 ipfamily = NF_INET6;
                 i += 1;
             }
-            "-s" => {
-                if i + 1 < args.len() {
-                    let parts: Vec<&str> = args[i + 1].split(',').collect();
-                    if parts.len() == 2 {
-                        local_send_buf = parts[0].parse().unwrap_or(0);
-                        local_recv_buf = parts[1].parse().unwrap_or(0);
-                    } else {
-                        local_send_buf = args[i + 1].parse().unwrap_or(0);
-                        local_recv_buf = local_send_buf;
-                    }
+            "-p" => {
+                if i + 1 < global_args.len() {
+                    port = global_args[i+1].parse().unwrap_or(NETPERF_PORT);
                     i += 2;
                 } else { i += 1; }
-            }
-            "-S" => {
-                if i + 1 < args.len() {
-                    let parts: Vec<&str> = args[i + 1].split(',').collect();
-                    if parts.len() == 2 {
-                        remote_send_buf = parts[0].parse().unwrap_or(0);
-                        remote_recv_buf = parts[1].parse().unwrap_or(0);
-                    } else {
-                        remote_send_buf = args[i + 1].parse().unwrap_or(0);
-                        remote_recv_buf = remote_send_buf;
-                    }
-                    i += 2;
-                } else { i += 1; }
-            }
-            "-D" => {
-                no_delay = 1;
-                i += 1;
             }
             "-V" => {
                 println!("rust_netperf version 0.1.0 (parity with netperf 2.6.0)");
@@ -135,7 +119,64 @@ fn parse_args(args: Vec<String>) -> Option<TestOptions> {
                 return None;
             }
             _ => {
-                println!("Unknown argument: {}", args[i]);
+                println!("Unknown global argument: {}", global_args[i]);
+                print_usage();
+                return None;
+            }
+        }
+    }
+
+    // Parse test-specific args
+    let mut i = 0;
+    while i < test_args.len() {
+        match test_args[i].as_str() {
+            "-m" => {
+                if i + 1 < test_args.len() {
+                    msg_size = parse_units(&test_args[i+1]).unwrap_or(32768) as usize;
+                    i += 2;
+                } else { i += 1; }
+            }
+            "-M" => {
+                if i + 1 < test_args.len() {
+                    remote_msg_size = parse_units(&test_args[i+1]).unwrap_or(0) as i32;
+                    i += 2;
+                } else { i += 1; }
+            }
+            "-r" => {
+                if i + 1 < test_args.len() {
+                    let (req, res) = parse_sizespec(&test_args[i+1]);
+                    if let Some(val) = req { request_size = val as i32; }
+                    if let Some(val) = res { response_size = val as i32; }
+                    i += 2;
+                } else { i += 1; }
+            }
+            "-s" => {
+                if i + 1 < test_args.len() {
+                    let (s, r) = parse_sizespec(&test_args[i+1]);
+                    if let Some(val) = s { local_send_buf = val as i32; }
+                    if let Some(val) = r { local_recv_buf = val as i32; }
+                    i += 2;
+                } else { i += 1; }
+            }
+            "-S" => {
+                if i + 1 < test_args.len() {
+                    let (s, r) = parse_sizespec(&test_args[i+1]);
+                    if let Some(val) = s { remote_send_buf = val as i32; }
+                    if let Some(val) = r { remote_recv_buf = val as i32; }
+                    i += 2;
+                } else { i += 1; }
+            }
+            "-D" => {
+                no_delay = 1;
+                i += 1;
+            }
+            "-h" => {
+                 // Test specific help would go here, but for now we just show general help
+                 print_usage();
+                 return None;
+            }
+            _ => {
+                println!("Unknown test-specific argument: {}", test_args[i]);
                 print_usage();
                 return None;
             }
@@ -146,6 +187,7 @@ fn parse_args(args: Vec<String>) -> Option<TestOptions> {
         host,
         duration,
         test_type,
+        port,
         msg_size,
         request_size,
         response_size,
@@ -155,6 +197,7 @@ fn parse_args(args: Vec<String>) -> Option<TestOptions> {
         remote_send_buf,
         remote_recv_buf,
         no_delay,
+        remote_msg_size,
     })
 }
 
@@ -162,6 +205,7 @@ struct TestOptions {
     host: String,
     duration: i32,
     test_type: String,
+    port: u16,
     msg_size: usize,
     request_size: i32,
     response_size: i32,
@@ -171,6 +215,7 @@ struct TestOptions {
     remote_send_buf: i32,
     remote_recv_buf: i32,
     no_delay: i32,
+    remote_msg_size: i32,
 }
 
 fn run_test(opts: TestOptions) -> std::io::Result<()> {
@@ -190,7 +235,7 @@ fn run_test(opts: TestOptions) -> std::io::Result<()> {
 }
 
 fn run_tcp_stream(opts: &TestOptions) -> std::io::Result<()> {
-    let mut control_stream = TcpStream::connect(format!("{}:{}", opts.host, NETPERF_PORT))?;
+    let mut control_stream = TcpStream::connect(format!("{}:{}", opts.host, opts.port))?;
     println!("Connected to control port on {}", opts.host);
 
     let mut req = NetperfRequest::default();
@@ -200,17 +245,11 @@ fn run_tcp_stream(opts: &TestOptions) -> std::io::Result<()> {
     tcp_req.test_length = opts.duration;
     tcp_req.send_buf_size = opts.remote_send_buf;
     tcp_req.recv_buf_size = opts.remote_recv_buf;
-    tcp_req.receive_size = opts.msg_size as i32;
+    tcp_req.receive_size = if opts.remote_msg_size > 0 { opts.remote_msg_size } else { opts.msg_size as i32 };
     tcp_req.no_delay = opts.no_delay;
     tcp_req.ipfamily = opts.ipfamily;
     
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &tcp_req as *const TcpStreamRequest as *const u8,
-            req.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<TcpStreamRequest>(),
-        );
-    }
+    req.test_specific_data = tcp_req.to_spec_data();
 
     send_request(&mut control_stream, &req)?;
     let res = recv_response(&mut control_stream)?;
@@ -220,14 +259,7 @@ fn run_tcp_stream(opts: &TestOptions) -> std::io::Result<()> {
         return Ok(());
     }
 
-    let mut tcp_res = TcpStreamResponse::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            res.test_specific_data.as_ptr() as *const u8,
-            &mut tcp_res as *mut TcpStreamResponse as *mut u8,
-            std::mem::size_of::<TcpStreamResponse>(),
-        );
-    }
+    let tcp_res = TcpStreamResponse::from_spec_data(&res.test_specific_data);
 
     let data_port = tcp_res.data_port_number;
     println!("Connecting to data port {}", data_port);
@@ -264,14 +296,7 @@ fn run_tcp_stream(opts: &TestOptions) -> std::io::Result<()> {
         return Ok(());
     }
 
-    let mut results = TcpStreamResults::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            res_final.test_specific_data.as_ptr() as *const u8,
-            &mut results as *mut TcpStreamResults as *mut u8,
-            std::mem::size_of::<TcpStreamResults>(),
-        );
-    }
+    let results = TcpStreamResults::from_spec_data(&res_final.test_specific_data);
 
     let throughput = (results.bytes_received * 8.0) / (results.elapsed_time as f64) / 1_000_000.0;
     println!("Throughput: {:.2} Mbps", throughput);
@@ -282,7 +307,7 @@ fn run_tcp_stream(opts: &TestOptions) -> std::io::Result<()> {
 }
 
 fn run_tcp_rr(opts: &TestOptions) -> std::io::Result<()> {
-    let mut control_stream = TcpStream::connect(format!("{}:{}", opts.host, NETPERF_PORT))?;
+    let mut control_stream = TcpStream::connect(format!("{}:{}", opts.host, opts.port))?;
     println!("Connected to control port on {}", opts.host);
 
     let mut req = NetperfRequest::default();
@@ -297,13 +322,7 @@ fn run_tcp_rr(opts: &TestOptions) -> std::io::Result<()> {
     tcp_req.no_delay = opts.no_delay;
     tcp_req.ipfamily = opts.ipfamily;
     
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &tcp_req as *const TcpRrRequest as *const u8,
-            req.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<TcpRrRequest>(),
-        );
-    }
+    req.test_specific_data = tcp_req.to_spec_data();
 
     send_request(&mut control_stream, &req)?;
     let res = recv_response(&mut control_stream)?;
@@ -313,14 +332,7 @@ fn run_tcp_rr(opts: &TestOptions) -> std::io::Result<()> {
         return Ok(());
     }
 
-    let mut tcp_res = TcpRrResponse::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            res.test_specific_data.as_ptr() as *const u8,
-            &mut tcp_res as *mut TcpRrResponse as *mut u8,
-            std::mem::size_of::<TcpRrResponse>(),
-        );
-    }
+    let tcp_res = TcpRrResponse::from_spec_data(&res.test_specific_data);
 
     let data_port = tcp_res.data_port_number;
     println!("Connecting to data port {}", data_port);
@@ -366,14 +378,7 @@ fn run_tcp_rr(opts: &TestOptions) -> std::io::Result<()> {
         return Ok(());
     }
 
-    let mut results = TcpRrResults::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            res_final.test_specific_data.as_ptr() as *const u8,
-            &mut results as *mut TcpRrResults as *mut u8,
-            std::mem::size_of::<TcpRrResults>(),
-        );
-    }
+    let results = TcpRrResults::from_spec_data(&res_final.test_specific_data);
 
     let trans_rate = (results.trans_received as f32) / results.elapsed_time;
     println!("Transaction rate: {:.2} Trans/s", trans_rate);
@@ -384,7 +389,7 @@ fn run_tcp_rr(opts: &TestOptions) -> std::io::Result<()> {
 }
 
 fn run_udp_stream(opts: &TestOptions) -> std::io::Result<()> {
-    let mut control_stream = TcpStream::connect(format!("{}:{}", opts.host, NETPERF_PORT))?;
+    let mut control_stream = TcpStream::connect(format!("{}:{}", opts.host, opts.port))?;
     println!("Connected to control port on {}", opts.host);
 
     let mut req = NetperfRequest::default();
@@ -396,13 +401,7 @@ fn run_udp_stream(opts: &TestOptions) -> std::io::Result<()> {
     udp_req.recv_buf_size = opts.remote_recv_buf;
     udp_req.ipfamily = opts.ipfamily;
     
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &udp_req as *const UdpStreamRequest as *const u8,
-            req.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<UdpStreamRequest>(),
-        );
-    }
+    req.test_specific_data = udp_req.to_spec_data();
 
     send_request(&mut control_stream, &req)?;
     let res = recv_response(&mut control_stream)?;
@@ -412,14 +411,7 @@ fn run_udp_stream(opts: &TestOptions) -> std::io::Result<()> {
         return Ok(());
     }
 
-    let mut udp_res = UdpStreamResponse::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            res.test_specific_data.as_ptr() as *const u8,
-            &mut udp_res as *mut UdpStreamResponse as *mut u8,
-            std::mem::size_of::<UdpStreamResponse>(),
-        );
-    }
+    let udp_res = UdpStreamResponse::from_spec_data(&res.test_specific_data);
 
     let data_port = udp_res.data_port_number;
     println!("Connecting to UDP data port {}", data_port);
@@ -457,14 +449,7 @@ fn run_udp_stream(opts: &TestOptions) -> std::io::Result<()> {
         return Ok(());
     }
 
-    let mut results = UdpStreamResults::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            res_final.test_specific_data.as_ptr() as *const u8,
-            &mut results as *mut UdpStreamResults as *mut u8,
-            std::mem::size_of::<UdpStreamResults>(),
-        );
-    }
+    let results = UdpStreamResults::from_spec_data(&res_final.test_specific_data);
 
     let throughput = (results.bytes_received as f64 * 8.0) / (results.elapsed_time as f64) / 1_000_000.0;
     println!("Throughput: {:.2} Mbps", throughput);
@@ -476,7 +461,7 @@ fn run_udp_stream(opts: &TestOptions) -> std::io::Result<()> {
 }
 
 fn run_udp_rr(opts: &TestOptions) -> std::io::Result<()> {
-    let mut control_stream = TcpStream::connect(format!("{}:{}", opts.host, NETPERF_PORT))?;
+    let mut control_stream = TcpStream::connect(format!("{}:{}", opts.host, opts.port))?;
     println!("Connected to control port on {}", opts.host);
 
     let mut req = NetperfRequest::default();
@@ -490,13 +475,7 @@ fn run_udp_rr(opts: &TestOptions) -> std::io::Result<()> {
     udp_req.recv_buf_size = opts.remote_recv_buf;
     udp_req.ipfamily = opts.ipfamily;
     
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &udp_req as *const UdpRrRequest as *const u8,
-            req.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<UdpRrRequest>(),
-        );
-    }
+    req.test_specific_data = udp_req.to_spec_data();
 
     send_request(&mut control_stream, &req)?;
     let res = recv_response(&mut control_stream)?;
@@ -506,14 +485,7 @@ fn run_udp_rr(opts: &TestOptions) -> std::io::Result<()> {
         return Ok(());
     }
 
-    let mut udp_res = UdpRrResponse::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            res.test_specific_data.as_ptr() as *const u8,
-            &mut udp_res as *mut UdpRrResponse as *mut u8,
-            std::mem::size_of::<UdpRrResponse>(),
-        );
-    }
+    let udp_res = UdpRrResponse::from_spec_data(&res.test_specific_data);
 
     let data_port = udp_res.data_port_number;
     println!("Connecting to UDP data port {}", data_port);
@@ -556,14 +528,7 @@ fn run_udp_rr(opts: &TestOptions) -> std::io::Result<()> {
         return Ok(());
     }
 
-    let mut results = UdpRrResults::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            res_final.test_specific_data.as_ptr() as *const u8,
-            &mut results as *mut UdpRrResults as *mut u8,
-            std::mem::size_of::<UdpRrResults>(),
-        );
-    }
+    let results = UdpRrResults::from_spec_data(&res_final.test_specific_data);
 
     let trans_rate = (results.trans_received as f32) / results.elapsed_time;
     println!("Transaction rate: {:.2} Trans/s", trans_rate);
@@ -574,7 +539,7 @@ fn run_udp_rr(opts: &TestOptions) -> std::io::Result<()> {
 }
 
 fn run_tcp_maerts(opts: &TestOptions) -> std::io::Result<()> {
-    let mut control_stream = TcpStream::connect(format!("{}:{}", opts.host, NETPERF_PORT))?;
+    let mut control_stream = TcpStream::connect(format!("{}:{}", opts.host, opts.port))?;
     println!("Connected to control port on {}", opts.host);
 
     let mut req = NetperfRequest::default();
@@ -588,13 +553,7 @@ fn run_tcp_maerts(opts: &TestOptions) -> std::io::Result<()> {
     tcp_req.no_delay = opts.no_delay;
     tcp_req.ipfamily = opts.ipfamily;
     
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &tcp_req as *const TcpStreamRequest as *const u8,
-            req.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<TcpStreamRequest>(),
-        );
-    }
+    req.test_specific_data = tcp_req.to_spec_data();
 
     send_request(&mut control_stream, &req)?;
     let res = recv_response(&mut control_stream)?;
@@ -604,14 +563,7 @@ fn run_tcp_maerts(opts: &TestOptions) -> std::io::Result<()> {
         return Ok(());
     }
 
-    let mut tcp_res = TcpStreamResponse::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            res.test_specific_data.as_ptr() as *const u8,
-            &mut tcp_res as *mut TcpStreamResponse as *mut u8,
-            std::mem::size_of::<TcpStreamResponse>(),
-        );
-    }
+    let tcp_res = TcpStreamResponse::from_spec_data(&res.test_specific_data);
 
     let data_port = tcp_res.data_port_number;
     println!("Connecting to data port {}", data_port);
@@ -651,14 +603,7 @@ fn run_tcp_maerts(opts: &TestOptions) -> std::io::Result<()> {
         return Ok(());
     }
 
-    let mut results = TcpStreamResults::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            res_final.test_specific_data.as_ptr() as *const u8,
-            &mut results as *mut TcpStreamResults as *mut u8,
-            std::mem::size_of::<TcpStreamResults>(),
-        );
-    }
+    let results = TcpStreamResults::from_spec_data(&res_final.test_specific_data);
 
     let throughput = (results.bytes_received * 8.0) / (results.elapsed_time as f64) / 1_000_000.0;
     println!("Throughput: {:.2} Mbps", throughput);
@@ -669,7 +614,7 @@ fn run_tcp_maerts(opts: &TestOptions) -> std::io::Result<()> {
 }
 
 fn run_tcp_crr(opts: &TestOptions) -> std::io::Result<()> {
-    let mut control_stream = TcpStream::connect(format!("{}:{}", opts.host, NETPERF_PORT))?;
+    let mut control_stream = TcpStream::connect(format!("{}:{}", opts.host, opts.port))?;
     println!("Connected to control port on {}", opts.host);
 
     let mut req = NetperfRequest::default();
@@ -684,13 +629,7 @@ fn run_tcp_crr(opts: &TestOptions) -> std::io::Result<()> {
     tcp_req.no_delay = opts.no_delay;
     tcp_req.ipfamily = opts.ipfamily;
     
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &tcp_req as *const TcpRrRequest as *const u8,
-            req.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<TcpRrRequest>(),
-        );
-    }
+    req.test_specific_data = tcp_req.to_spec_data();
 
     send_request(&mut control_stream, &req)?;
     let res = recv_response(&mut control_stream)?;
@@ -700,14 +639,7 @@ fn run_tcp_crr(opts: &TestOptions) -> std::io::Result<()> {
         return Ok(());
     }
 
-    let mut tcp_res = TcpRrResponse::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            res.test_specific_data.as_ptr() as *const u8,
-            &mut tcp_res as *mut TcpRrResponse as *mut u8,
-            std::mem::size_of::<TcpRrResponse>(),
-        );
-    }
+    let tcp_res = TcpRrResponse::from_spec_data(&res.test_specific_data);
 
     let data_port = tcp_res.data_port_number;
     println!("Target data port {}", data_port);
@@ -762,14 +694,7 @@ fn run_tcp_crr(opts: &TestOptions) -> std::io::Result<()> {
         return Ok(());
     }
 
-    let mut results = TcpRrResults::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            res_final.test_specific_data.as_ptr() as *const u8,
-            &mut results as *mut TcpRrResults as *mut u8,
-            std::mem::size_of::<TcpRrResults>(),
-        );
-    }
+    let results = TcpRrResults::from_spec_data(&res_final.test_specific_data);
 
     let trans_rate = (results.trans_received as f32) / results.elapsed_time;
     println!("Transaction rate: {:.2} Trans/s", trans_rate);
@@ -780,7 +705,7 @@ fn run_tcp_crr(opts: &TestOptions) -> std::io::Result<()> {
 }
 
 fn run_tcp_cc(opts: &TestOptions) -> std::io::Result<()> {
-    let mut control_stream = TcpStream::connect(format!("{}:{}", opts.host, NETPERF_PORT))?;
+    let mut control_stream = TcpStream::connect(format!("{}:{}", opts.host, opts.port))?;
     println!("Connected to control port on {}", opts.host);
 
     let mut req = NetperfRequest::default();
@@ -793,13 +718,7 @@ fn run_tcp_cc(opts: &TestOptions) -> std::io::Result<()> {
     tcp_req.no_delay = opts.no_delay;
     tcp_req.ipfamily = opts.ipfamily;
     
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &tcp_req as *const TcpCcRequest as *const u8,
-            req.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<TcpCcRequest>(),
-        );
-    }
+    req.test_specific_data = tcp_req.to_spec_data();
 
     send_request(&mut control_stream, &req)?;
     let res = recv_response(&mut control_stream)?;
@@ -809,14 +728,7 @@ fn run_tcp_cc(opts: &TestOptions) -> std::io::Result<()> {
         return Ok(());
     }
 
-    let mut tcp_res = TcpCcResponse::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            res.test_specific_data.as_ptr() as *const u8,
-            &mut tcp_res as *mut TcpCcResponse as *mut u8,
-            std::mem::size_of::<TcpCcResponse>(),
-        );
-    }
+    let tcp_res = TcpCcResponse::from_spec_data(&res.test_specific_data);
 
     let data_port = tcp_res.data_port_number;
     println!("Target data port {}", data_port);
@@ -850,14 +762,7 @@ fn run_tcp_cc(opts: &TestOptions) -> std::io::Result<()> {
         return Ok(());
     }
 
-    let mut results = TcpCcResults::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            res_final.test_specific_data.as_ptr() as *const u8,
-            &mut results as *mut TcpCcResults as *mut u8,
-            std::mem::size_of::<TcpCcResults>(),
-        );
-    }
+    let results = TcpCcResults::from_spec_data(&res_final.test_specific_data);
 
     let trans_rate = (results.trans_received as f32) / results.elapsed_time;
     println!("Transaction rate: {:.2} Trans/s", trans_rate);

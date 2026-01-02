@@ -6,6 +6,8 @@ use std::thread;
 use std::env;
 use socket2::{Socket, Domain, Type, Protocol};
 
+use std::sync::{Arc, Mutex};
+
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
     let port = if let Some(p) = parse_args(args) {
@@ -23,13 +25,29 @@ fn main() -> std::io::Result<()> {
 
     println!("Netserver listening on {}", listener.local_addr()?);
 
+    // Security: Connection limiting
+    let max_connections = 64;
+    let connections = Arc::new(Mutex::new(0));
+
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
+                let conn_count = connections.clone();
+                {
+                    let mut count = conn_count.lock().unwrap();
+                    if *count >= max_connections {
+                        eprintln!("Max connections reached, rejecting client");
+                        continue;
+                    }
+                    *count += 1;
+                }
+                
                 thread::spawn(move || {
                     if let Err(e) = handle_client(&mut stream) {
                         eprintln!("Error handling client: {}", e);
                     }
+                    let mut count = conn_count.lock().unwrap();
+                    *count -= 1;
                 });
             }
             Err(e) => {
@@ -138,14 +156,7 @@ fn apply_udp_options(socket: &UdpSocket, send_buf: i32, recv_buf: i32) -> std::i
 }
 
 fn handle_tcp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::io::Result<()> {
-    let mut tcp_req = TcpStreamRequest::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            req.test_specific_data.as_ptr() as *const u8,
-            &mut tcp_req as *mut TcpStreamRequest as *mut u8,
-            std::mem::size_of::<TcpStreamRequest>(),
-        );
-    }
+    let tcp_req = TcpStreamRequest::from_spec_data(&req.test_specific_data);
 
     // Set up data connection
     let local_addr = control_stream.local_addr()?;
@@ -162,13 +173,7 @@ fn handle_tcp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
     tcp_res.send_buf_size = tcp_req.send_buf_size;
     tcp_res.no_delay = tcp_req.no_delay;
     
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &tcp_res as *const TcpStreamResponse as *const u8,
-            res.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<TcpStreamResponse>(),
-        );
-    }
+    res.test_specific_data = tcp_res.to_spec_data();
 
     send_response(control_stream, &res)?;
 
@@ -179,9 +184,16 @@ fn handle_tcp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
     let start = Instant::now();
     let mut bytes_received = 0u64;
     let mut recv_calls = 0u32;
-    let mut buf = vec![0u8; if tcp_req.receive_size > 0 { tcp_req.receive_size as usize } else { 32768 }];
+    
+    // Security: implement upper bounds for memory allocations
+    let buf_size = if tcp_req.receive_size > 0 && tcp_req.receive_size <= 1024 * 1024 { 
+        tcp_req.receive_size as usize 
+    } else { 
+        32768 
+    };
+    let mut buf = vec![0u8; buf_size];
 
-    let test_duration = if tcp_req.test_length > 0 {
+    let test_duration = if tcp_req.test_length > 0 && tcp_req.test_length < 3600 {
         Duration::from_secs(tcp_req.test_length as u64)
     } else {
         Duration::from_secs(10) // Default
@@ -219,13 +231,7 @@ fn handle_tcp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
     
     let mut res_final = NetperfResponse::default();
     res_final.response_type = TCP_STREAM_RESULTS;
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &results as *const TcpStreamResults as *const u8,
-            res_final.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<TcpStreamResults>(),
-        );
-    }
+    res_final.test_specific_data = results.to_spec_data();
     
     send_response(control_stream, &res_final)?;
 
@@ -233,14 +239,7 @@ fn handle_tcp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
 }
 
 fn handle_tcp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::io::Result<()> {
-    let mut tcp_req = TcpRrRequest::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            req.test_specific_data.as_ptr() as *const u8,
-            &mut tcp_req as *mut TcpRrRequest as *mut u8,
-            std::mem::size_of::<TcpRrRequest>(),
-        );
-    }
+    let tcp_req = TcpRrRequest::from_spec_data(&req.test_specific_data);
 
     let local_addr = control_stream.local_addr()?;
     let bind_addr = SocketAddr::new(local_addr.ip(), 0);
@@ -256,13 +255,7 @@ fn handle_tcp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
     tcp_res.send_buf_size = tcp_req.send_buf_size;
     tcp_res.no_delay = tcp_req.no_delay;
     
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &tcp_res as *const TcpRrResponse as *const u8,
-            res.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<TcpRrResponse>(),
-        );
-    }
+    res.test_specific_data = tcp_res.to_spec_data();
 
     send_response(control_stream, &res)?;
 
@@ -271,9 +264,22 @@ fn handle_tcp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
     
     let start = Instant::now();
     let mut trans_received = 0u32;
-    let mut buf = vec![0u8; std::cmp::max(tcp_req.request_size, tcp_req.response_size) as usize];
+    
+    // Security: Input validation
+    let req_size = if tcp_req.request_size > 0 && tcp_req.request_size <= 1024 * 1024 {
+        tcp_req.request_size as usize
+    } else {
+        1
+    };
+    let res_size = if tcp_req.response_size > 0 && tcp_req.response_size <= 1024 * 1024 {
+        tcp_req.response_size as usize
+    } else {
+        1
+    };
+    
+    let mut buf = vec![0u8; std::cmp::max(req_size, res_size)];
 
-    let test_duration = if tcp_req.test_length > 0 {
+    let test_duration = if tcp_req.test_length > 0 && tcp_req.test_length < 3600 {
         Duration::from_secs(tcp_req.test_length as u64)
     } else {
         Duration::from_secs(10)
@@ -281,7 +287,6 @@ fn handle_tcp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
 
     while start.elapsed() < test_duration {
         // Read request
-        let req_size = tcp_req.request_size as usize;
         let mut read = 0;
         while read < req_size {
             match data_stream.read(&mut buf[read..req_size]) {
@@ -294,7 +299,6 @@ fn handle_tcp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
         if read < req_size { break; }
 
         // Send response
-        let res_size = tcp_req.response_size as usize;
         if let Err(_) = data_stream.write_all(&buf[..res_size]) {
             break;
         }
@@ -314,13 +318,7 @@ fn handle_tcp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
     
     let mut res_final = NetperfResponse::default();
     res_final.response_type = TCP_RR_RESULTS;
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &results as *const TcpRrResults as *const u8,
-            res_final.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<TcpRrResults>(),
-        );
-    }
+    res_final.test_specific_data = results.to_spec_data();
     
     send_response(control_stream, &res_final)?;
 
@@ -328,14 +326,7 @@ fn handle_tcp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
 }
 
 fn handle_udp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::io::Result<()> {
-    let mut udp_req = UdpStreamRequest::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            req.test_specific_data.as_ptr() as *const u8,
-            &mut udp_req as *mut UdpStreamRequest as *mut u8,
-            std::mem::size_of::<UdpStreamRequest>(),
-        );
-    }
+    let udp_req = UdpStreamRequest::from_spec_data(&req.test_specific_data);
 
     let local_addr = control_stream.local_addr()?;
     let bind_addr = SocketAddr::new(local_addr.ip(), 0);
@@ -350,13 +341,7 @@ fn handle_udp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
     udp_res.test_length = udp_req.test_length;
     udp_res.recv_buf_size = udp_req.recv_buf_size;
     
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &udp_res as *const UdpStreamResponse as *const u8,
-            res.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<UdpStreamResponse>(),
-        );
-    }
+    res.test_specific_data = udp_res.to_spec_data();
 
     send_response(control_stream, &res)?;
 
@@ -365,7 +350,7 @@ fn handle_udp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
     let mut messages_recvd = 0u32;
     let mut buf = vec![0u8; 65536];
 
-    let test_duration = if udp_req.test_length > 0 {
+    let test_duration = if udp_req.test_length > 0 && udp_req.test_length < 3600 {
         Duration::from_secs(udp_req.test_length as u64)
     } else {
         Duration::from_secs(10)
@@ -401,13 +386,7 @@ fn handle_udp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
     
     let mut res_final = NetperfResponse::default();
     res_final.response_type = UDP_STREAM_RESULTS;
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &results as *const UdpStreamResults as *const u8,
-            res_final.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<UdpStreamResults>(),
-        );
-    }
+    res_final.test_specific_data = results.to_spec_data();
     
     send_response(control_stream, &res_final)?;
 
@@ -415,14 +394,7 @@ fn handle_udp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
 }
 
 fn handle_udp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::io::Result<()> {
-    let mut udp_req = UdpRrRequest::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            req.test_specific_data.as_ptr() as *const u8,
-            &mut udp_req as *mut UdpRrRequest as *mut u8,
-            std::mem::size_of::<UdpRrRequest>(),
-        );
-    }
+    let udp_req = UdpRrRequest::from_spec_data(&req.test_specific_data);
 
     let local_addr = control_stream.local_addr()?;
     let bind_addr = SocketAddr::new(local_addr.ip(), 0);
@@ -439,21 +411,27 @@ fn handle_udp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
     udp_res.send_buf_size = udp_req.send_buf_size;
     udp_res.no_delay = udp_req.no_delay;
     
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &udp_res as *const UdpRrResponse as *const u8,
-            res.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<UdpRrResponse>(),
-        );
-    }
+    res.test_specific_data = udp_res.to_spec_data();
 
     send_response(control_stream, &res)?;
 
     let start = Instant::now();
     let mut trans_received = 0u32;
-    let mut buf = vec![0u8; 65536];
+    
+    // Security: Input validation
+    let req_size = if udp_req.request_size > 0 && udp_req.request_size <= 65535 {
+        udp_req.request_size as usize
+    } else {
+        1
+    };
+    let res_size = if udp_req.response_size > 0 && udp_req.response_size <= 65535 {
+        udp_req.response_size as usize
+    } else {
+        1
+    };
+    let mut buf = vec![0u8; std::cmp::max(req_size, res_size)];
 
-    let test_duration = if udp_req.test_length > 0 {
+    let test_duration = if udp_req.test_length > 0 && udp_req.test_length < 3600 {
         Duration::from_secs(udp_req.test_length as u64)
     } else {
         Duration::from_secs(10)
@@ -465,9 +443,8 @@ fn handle_udp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
         // Read request
         match udp_socket.recv_from(&mut buf) {
             Ok((n, addr)) => {
-                if n >= udp_req.request_size as usize {
+                if n >= req_size {
                     // Send response
-                    let res_size = udp_req.response_size as usize;
                     if let Err(_) = udp_socket.send_to(&buf[..res_size], addr) {
                         break;
                     }
@@ -494,13 +471,7 @@ fn handle_udp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
     
     let mut res_final = NetperfResponse::default();
     res_final.response_type = UDP_RR_RESULTS;
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &results as *const UdpRrResults as *const u8,
-            res_final.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<UdpRrResults>(),
-        );
-    }
+    res_final.test_specific_data = results.to_spec_data();
     
     send_response(control_stream, &res_final)?;
 
@@ -508,14 +479,7 @@ fn handle_udp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
 }
 
 fn handle_tcp_maerts(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::io::Result<()> {
-    let mut tcp_req = TcpStreamRequest::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            req.test_specific_data.as_ptr() as *const u8,
-            &mut tcp_req as *mut TcpStreamRequest as *mut u8,
-            std::mem::size_of::<TcpStreamRequest>(),
-        );
-    }
+    let tcp_req = TcpStreamRequest::from_spec_data(&req.test_specific_data);
 
     let local_addr = control_stream.local_addr()?;
     let bind_addr = SocketAddr::new(local_addr.ip(), 0);
@@ -531,13 +495,7 @@ fn handle_tcp_maerts(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
     tcp_res.send_buf_size = tcp_req.send_buf_size;
     tcp_res.no_delay = tcp_req.no_delay;
     
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &tcp_res as *const TcpStreamResponse as *const u8,
-            res.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<TcpStreamResponse>(),
-        );
-    }
+    res.test_specific_data = tcp_res.to_spec_data();
 
     send_response(control_stream, &res)?;
 
@@ -547,9 +505,16 @@ fn handle_tcp_maerts(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
     let start = Instant::now();
     let mut bytes_sent = 0u64;
     let mut send_calls = 0u32;
-    let buf = vec![0u8; if tcp_req.receive_size > 0 { tcp_req.receive_size as usize } else { 32768 }];
+    
+    // Security: implement upper bounds for memory allocations
+    let buf_size = if tcp_req.receive_size > 0 && tcp_req.receive_size <= 1024 * 1024 { 
+        tcp_req.receive_size as usize 
+    } else { 
+        32768 
+    };
+    let buf = vec![0u8; buf_size];
 
-    let test_duration = if tcp_req.test_length > 0 {
+    let test_duration = if tcp_req.test_length > 0 && tcp_req.test_length < 3600 {
         Duration::from_secs(tcp_req.test_length as u64)
     } else {
         Duration::from_secs(10)
@@ -580,13 +545,7 @@ fn handle_tcp_maerts(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
     
     let mut res_final = NetperfResponse::default();
     res_final.response_type = TCP_MAERTS_RESULTS;
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &results as *const TcpStreamResults as *const u8,
-            res_final.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<TcpStreamResults>(),
-        );
-    }
+    res_final.test_specific_data = results.to_spec_data();
     
     send_response(control_stream, &res_final)?;
 
@@ -594,14 +553,7 @@ fn handle_tcp_maerts(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
 }
 
 fn handle_tcp_crr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::io::Result<()> {
-    let mut tcp_req = TcpRrRequest::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            req.test_specific_data.as_ptr() as *const u8,
-            &mut tcp_req as *mut TcpRrRequest as *mut u8,
-            std::mem::size_of::<TcpRrRequest>(),
-        );
-    }
+    let tcp_req = TcpRrRequest::from_spec_data(&req.test_specific_data);
 
     let local_addr = control_stream.local_addr()?;
     let bind_addr = SocketAddr::new(local_addr.ip(), 0);
@@ -618,21 +570,27 @@ fn handle_tcp_crr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::
     tcp_res.send_buf_size = tcp_req.send_buf_size;
     tcp_res.no_delay = tcp_req.no_delay;
     
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &tcp_res as *const TcpRrResponse as *const u8,
-            res.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<TcpRrResponse>(),
-        );
-    }
+    res.test_specific_data = tcp_res.to_spec_data();
 
     send_response(control_stream, &res)?;
 
     let start = Instant::now();
     let mut trans_received = 0u32;
-    let mut buf = vec![0u8; std::cmp::max(tcp_req.request_size, tcp_req.response_size) as usize];
+    
+    // Security: Input validation
+    let req_size = if tcp_req.request_size > 0 && tcp_req.request_size <= 1024 * 1024 {
+        tcp_req.request_size as usize
+    } else {
+        1
+    };
+    let res_size = if tcp_req.response_size > 0 && tcp_req.response_size <= 1024 * 1024 {
+        tcp_req.response_size as usize
+    } else {
+        1
+    };
+    let mut buf = vec![0u8; std::cmp::max(req_size, res_size)];
 
-    let test_duration = if tcp_req.test_length > 0 {
+    let test_duration = if tcp_req.test_length > 0 && tcp_req.test_length < 3600 {
         Duration::from_secs(tcp_req.test_length as u64)
     } else {
         Duration::from_secs(10)
@@ -651,7 +609,6 @@ fn handle_tcp_crr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::
         let _ = apply_tcp_options(&data_stream, tcp_req.send_buf_size, tcp_req.recv_buf_size, tcp_req.no_delay);
 
         // Read request
-        let req_size = tcp_req.request_size as usize;
         let mut read = 0;
         while read < req_size {
             match data_stream.read(&mut buf[read..req_size]) {
@@ -664,7 +621,6 @@ fn handle_tcp_crr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::
         
         if read == req_size {
             // Send response
-            let res_size = tcp_req.response_size as usize;
             if let Ok(_) = data_stream.write_all(&buf[..res_size]) {
                 trans_received += 1;
             }
@@ -685,13 +641,7 @@ fn handle_tcp_crr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::
     
     let mut res_final = NetperfResponse::default();
     res_final.response_type = TCP_CRR_RESULTS;
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &results as *const TcpRrResults as *const u8,
-            res_final.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<TcpRrResults>(),
-        );
-    }
+    res_final.test_specific_data = results.to_spec_data();
     
     send_response(control_stream, &res_final)?;
 
@@ -699,14 +649,7 @@ fn handle_tcp_crr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::
 }
 
 fn handle_tcp_cc(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::io::Result<()> {
-    let mut tcp_req = TcpCcRequest::default();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            req.test_specific_data.as_ptr() as *const u8,
-            &mut tcp_req as *mut TcpCcRequest as *mut u8,
-            std::mem::size_of::<TcpCcRequest>(),
-        );
-    }
+    let tcp_req = TcpCcRequest::from_spec_data(&req.test_specific_data);
 
     let local_addr = control_stream.local_addr()?;
     let bind_addr = SocketAddr::new(local_addr.ip(), 0);
@@ -723,20 +666,14 @@ fn handle_tcp_cc(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
     tcp_res.send_buf_size = tcp_req.send_buf_size;
     tcp_res.no_delay = tcp_req.no_delay;
     
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &tcp_res as *const TcpCcResponse as *const u8,
-            res.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<TcpCcResponse>(),
-        );
-    }
+    res.test_specific_data = tcp_res.to_spec_data();
 
     send_response(control_stream, &res)?;
 
     let start = Instant::now();
     let mut trans_received = 0u32;
 
-    let test_duration = if tcp_req.test_length > 0 {
+    let test_duration = if tcp_req.test_length > 0 && tcp_req.test_length < 3600 {
         Duration::from_secs(tcp_req.test_length as u64)
     } else {
         Duration::from_secs(10)
@@ -768,13 +705,7 @@ fn handle_tcp_cc(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
     
     let mut res_final = NetperfResponse::default();
     res_final.response_type = TCP_CC_RESULTS;
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &results as *const TcpCcResults as *const u8,
-            res_final.test_specific_data.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<TcpCcResults>(),
-        );
-    }
+    res_final.test_specific_data = results.to_spec_data();
     
     send_response(control_stream, &res_final)?;
 
