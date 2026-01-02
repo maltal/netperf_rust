@@ -1,15 +1,15 @@
 [package]
-name = "rust_netperf"
-version = "0.1.0"
+name = "netperf_rust"
+version = "0.1.1"
 edition = "2024"
 
 [dependencies]
 socket2 = "0.6.1"
 
 [[bin]]
-name = "netserver"
-path = "src/bin/rust_netserver.rs"
+name = "netserver_rust"
+path = "src/bin/netserver_rust.rs"
 
 [[bin]]
-name = "netperf"
-path = "src/bin/rust_netperf.rs"
+name = "netperf_rust"
+path = "src/bin/netperf_rust.rs"

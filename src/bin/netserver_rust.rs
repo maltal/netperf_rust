@@ -1,13 +1,22 @@
-use rust_netperf::*;
+use netperf_rust::*;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream, UdpSocket, SocketAddr};
 use std::time::{Duration, Instant};
 use std::thread;
+use std::env;
 use socket2::{Socket, Domain, Type, Protocol};
 
 fn main() -> std::io::Result<()> {
-    let addr_v6: SocketAddr = format!("[::]:{}", NETPERF_PORT).parse().unwrap();
-    let addr_v4: SocketAddr = format!("0.0.0.0:{}", NETPERF_PORT).parse().unwrap();
+    let args: Vec<String> = env::args().collect();
+    let port = if let Some(p) = parse_args(args) {
+        p
+    } else {
+        return Ok(());
+    };
+
+    print_banner("netserver_rust");
+    let addr_v6: SocketAddr = format!("[::]:{}", port).parse().unwrap();
+    let addr_v4: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
 
     let listener = create_listener(addr_v6)
         .or_else(|_| create_listener(addr_v4))?;
@@ -30,6 +39,43 @@ fn main() -> std::io::Result<()> {
     }
 
     Ok(())
+}
+
+fn print_usage() {
+    println!("Usage: netserver_rust [options]");
+    println!("Options:");
+    println!("  -p <port>   Port to listen on (default: {})", NETPERF_PORT);
+    println!("  -V          Print version");
+    println!("  -h, --help  Print this help message");
+}
+
+fn parse_args(args: Vec<String>) -> Option<u16> {
+    let mut port = NETPERF_PORT;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-p" => {
+                if i + 1 < args.len() {
+                    port = args[i + 1].parse().unwrap_or(NETPERF_PORT);
+                    i += 2;
+                } else { i += 1; }
+            }
+            "-V" => {
+                println!("netserver_rust version 0.1.0");
+                return None;
+            }
+            "-h" | "--help" => {
+                print_usage();
+                return None;
+            }
+            _ => {
+                println!("Unknown argument: {}", args[i]);
+                print_usage();
+                return None;
+            }
+        }
+    }
+    Some(port)
 }
 
 fn create_listener(addr: SocketAddr) -> std::io::Result<TcpListener> {
@@ -84,11 +130,11 @@ fn handle_client(stream: &mut TcpStream) -> std::io::Result<()> {
 }
 
 fn apply_tcp_options(stream: &TcpStream, send_buf: i32, recv_buf: i32, no_delay: i32) -> std::io::Result<()> {
-    rust_netperf::apply_tcp_options(stream, send_buf, recv_buf, no_delay)
+    netperf_rust::apply_tcp_options(stream, send_buf, recv_buf, no_delay)
 }
 
 fn apply_udp_options(socket: &UdpSocket, send_buf: i32, recv_buf: i32) -> std::io::Result<()> {
-    rust_netperf::apply_udp_options(socket, send_buf, recv_buf)
+    netperf_rust::apply_udp_options(socket, send_buf, recv_buf)
 }
 
 fn handle_tcp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::io::Result<()> {

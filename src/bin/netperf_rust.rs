@@ -1,4 +1,4 @@
-use rust_netperf::*;
+use netperf_rust::*;
 use std::io::{Read, Write};
 use std::net::{TcpStream, UdpSocket};
 use std::time::{Duration, Instant};
@@ -10,10 +10,28 @@ fn main() -> std::io::Result<()> {
     let opts = parse_args(args);
 
     if let Some(opts) = opts {
+        print_banner("netperf_rust");
         run_test(opts)
     } else {
         Ok(())
     }
+}
+
+fn print_usage() {
+    println!("Usage: netperf_rust [options]");
+    println!("Options:");
+    println!("  -H <host>       Remote host to connect to (default: localhost)");
+    println!("  -l <duration>   Test duration in seconds (default: 10)");
+    println!("  -t <type>       Test type: TCP_STREAM, TCP_RR, UDP_STREAM, UDP_RR, TCP_MAERTS, TCP_CRR, TCP_CC (default: TCP_STREAM)");
+    println!("  -m <size>       Message size for stream tests (default: 32768)");
+    println!("  -r <req,res>    Request and response sizes for RR tests (default: 1,1)");
+    println!("  -s <send,recv>  Local send and receive buffer sizes");
+    println!("  -S <send,recv>  Remote send and receive buffer sizes");
+    println!("  -D              Set TCP_NODELAY (default: false)");
+    println!("  -4              Use IPv4");
+    println!("  -6              Use IPv6");
+    println!("  -V              Print version");
+    println!("  -h, --help      Print this help message");
 }
 
 fn parse_args(args: Vec<String>) -> Option<TestOptions> {
@@ -112,7 +130,15 @@ fn parse_args(args: Vec<String>) -> Option<TestOptions> {
                 println!("rust_netperf version 0.1.0 (parity with netperf 2.6.0)");
                 return None;
             }
-            _ => i += 1,
+            "-h" | "--help" => {
+                print_usage();
+                return None;
+            }
+            _ => {
+                println!("Unknown argument: {}", args[i]);
+                print_usage();
+                return None;
+            }
         }
     }
 

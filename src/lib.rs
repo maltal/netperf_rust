@@ -341,3 +341,15 @@ pub fn recv_response(stream: &mut TcpStream) -> std::io::Result<NetperfResponse>
     }
     Ok(res)
 }
+
+pub fn print_banner(name: &str) {
+    println!("****************************************************************");
+    println!("*                                                              *");
+    let version = "0.1.0";
+    let line = format!("*  {} version {}", name, version);
+    let padding = 63 - line.len();
+    let right_padding = " ".repeat(padding);
+    println!("{}{}*", line, right_padding);
+    println!("*                                                              *");
+    println!("****************************************************************");
+}
