@@ -213,57 +213,13 @@ pub struct UdpStreamResults {
     pub num_cpus: c_int,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Default)]
-pub struct UdpRrRequest {
-    pub recv_buf_size: c_int,
-    pub send_buf_size: c_int,
-    pub recv_alignment: c_int,
-    pub recv_offset: c_int,
-    pub send_alignment: c_int,
-    pub send_offset: c_int,
-    pub request_size: c_int,
-    pub response_size: c_int,
-    pub no_delay: c_int,
-    pub measure_cpu: c_int,
-    pub cpu_rate: f32,
-    pub test_length: c_int,
-    pub so_rcvavoid: c_int,
-    pub so_sndavoid: c_int,
-    pub port: c_int,
-    pub ipfamily: c_int,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Default)]
-pub struct UdpRrResponse {
-    pub recv_buf_size: c_int,
-    pub no_delay: c_int,
-    pub measure_cpu: c_int,
-    pub test_length: c_int,
-    pub send_buf_size: c_int,
-    pub data_port_number: c_int,
-    pub cpu_rate: f32,
-    pub so_rcvavoid: c_int,
-    pub so_sndavoid: c_int,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Default)]
-pub struct UdpRrResults {
-    pub bytes_received: u32,
-    pub recv_calls: u32,
-    pub trans_received: u32,
-    pub elapsed_time: f32,
-    pub cpu_util: f32,
-    pub serv_dem: f32,
-    pub cpu_method: c_int,
-    pub num_cpus: c_int,
-}
 
 pub type TcpCcRequest = TcpRrRequest;
 pub type TcpCcResponse = TcpRrResponse;
 pub type TcpCcResults = TcpRrResults;
+pub type UdpRrRequest = TcpRrRequest;
+pub type UdpRrResponse = TcpRrResponse;
+pub type UdpRrResults = TcpRrResults;
 
 pub fn apply_tcp_options(stream: &TcpStream, send_buf: i32, recv_buf: i32, no_delay: i32) -> std::io::Result<()> {
     let sock = SockRef::from(stream);
@@ -635,107 +591,6 @@ impl UdpStreamResults {
     }
 }
 
-impl UdpRrRequest {
-    pub fn to_spec_data(&self) -> [c_int; MAXSPECDATA] {
-        let mut data = [0; MAXSPECDATA];
-        data[0] = self.recv_buf_size;
-        data[1] = self.send_buf_size;
-        data[2] = self.recv_alignment;
-        data[3] = self.recv_offset;
-        data[4] = self.send_alignment;
-        data[5] = self.send_offset;
-        data[6] = self.request_size;
-        data[7] = self.response_size;
-        data[8] = self.no_delay;
-        data[9] = self.measure_cpu;
-        data[10] = self.cpu_rate.to_bits() as i32;
-        data[11] = self.test_length;
-        data[12] = self.so_rcvavoid;
-        data[13] = self.so_sndavoid;
-        data[14] = self.port;
-        data[15] = self.ipfamily;
-        data
-    }
-
-    pub fn from_spec_data(data: &[c_int; MAXSPECDATA]) -> Self {
-        Self {
-            recv_buf_size: data[0],
-            send_buf_size: data[1],
-            recv_alignment: data[2],
-            recv_offset: data[3],
-            send_alignment: data[4],
-            send_offset: data[5],
-            request_size: data[6],
-            response_size: data[7],
-            no_delay: data[8],
-            measure_cpu: data[9],
-            cpu_rate: f32::from_bits(data[10] as u32),
-            test_length: data[11],
-            so_rcvavoid: data[12],
-            so_sndavoid: data[13],
-            port: data[14],
-            ipfamily: data[15],
-        }
-    }
-}
-
-impl UdpRrResponse {
-    pub fn to_spec_data(&self) -> [c_int; MAXSPECDATA] {
-        let mut data = [0; MAXSPECDATA];
-        data[0] = self.recv_buf_size;
-        data[1] = self.no_delay;
-        data[2] = self.measure_cpu;
-        data[3] = self.test_length;
-        data[4] = self.send_buf_size;
-        data[5] = self.data_port_number;
-        data[6] = self.cpu_rate.to_bits() as i32;
-        data[7] = self.so_rcvavoid;
-        data[8] = self.so_sndavoid;
-        data
-    }
-
-    pub fn from_spec_data(data: &[c_int; MAXSPECDATA]) -> Self {
-        Self {
-            recv_buf_size: data[0],
-            no_delay: data[1],
-            measure_cpu: data[2],
-            test_length: data[3],
-            send_buf_size: data[4],
-            data_port_number: data[5],
-            cpu_rate: f32::from_bits(data[6] as u32),
-            so_rcvavoid: data[7],
-            so_sndavoid: data[8],
-        }
-    }
-}
-
-impl UdpRrResults {
-    pub fn to_spec_data(&self) -> [c_int; MAXSPECDATA] {
-        let mut data = [0; MAXSPECDATA];
-        data[0] = self.bytes_received as i32;
-        data[1] = self.recv_calls as i32;
-        data[2] = self.trans_received as i32;
-        data[3] = self.elapsed_time.to_bits() as i32;
-        data[4] = self.cpu_util.to_bits() as i32;
-        data[5] = self.serv_dem.to_bits() as i32;
-        data[6] = self.cpu_method;
-        data[7] = self.num_cpus;
-        data
-    }
-
-    pub fn from_spec_data(data: &[c_int; MAXSPECDATA]) -> Self {
-        Self {
-            bytes_received: data[0] as u32,
-            recv_calls: data[1] as u32,
-            trans_received: data[2] as u32,
-            elapsed_time: f32::from_bits(data[3] as u32),
-            cpu_util: f32::from_bits(data[4] as u32),
-            serv_dem: f32::from_bits(data[5] as u32),
-            cpu_method: data[6],
-            num_cpus: data[7],
-        }
-    }
-}
 
 pub fn send_request(stream: &mut TcpStream, req: &NetperfRequest) -> std::io::Result<()> {
     stream.write_all(&req.to_bytes())

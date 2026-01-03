@@ -147,13 +147,6 @@ fn handle_client(stream: &mut TcpStream) -> std::io::Result<()> {
     }
 }
 
-fn apply_tcp_options(stream: &TcpStream, send_buf: i32, recv_buf: i32, no_delay: i32) -> std::io::Result<()> {
-    netperf_rust::apply_tcp_options(stream, send_buf, recv_buf, no_delay)
-}
-
-fn apply_udp_options(socket: &UdpSocket, send_buf: i32, recv_buf: i32) -> std::io::Result<()> {
-    netperf_rust::apply_udp_options(socket, send_buf, recv_buf)
-}
 
 fn handle_tcp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::io::Result<()> {
     let tcp_req = TcpStreamRequest::from_spec_data(&req.test_specific_data);
