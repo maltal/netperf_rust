@@ -93,6 +93,41 @@ Run tests against a `netserver_rust` instance.
 ./target/release/netperf_rust -H localhost -t TCP_RR -- -r 1K,1K
 ```
 
+## Cross Compilation
+
+To cross-compile `netperf_rust` for other platforms (e.g., from macOS to Linux), the easiest way is to use [`cross`](https://github.com/cross-rs/cross).
+
+### Using `cross`
+
+1. Install `cross`:
+   ```bash
+   cargo install cross --git https://github.com/cross-rs/cross
+   ```
+
+2. Build for a specific target (e.g., x86_64 Linux):
+   ```bash
+   cross build --target x86_64-unknown-linux-gnu --release
+   ```
+
+### Using standard `cargo` (Manual)
+
+If you prefer not to use `cross`, you can add the target via `rustup` and provide a linker.
+
+1. Add the target:
+   ```bash
+   rustup target add x86_64-unknown-linux-gnu
+   ```
+
+2. Build with a cross-linker (requires a linker for the target to be installed on your host):
+   ```bash
+   cargo build --target x86_64-unknown-linux-gnu --release
+   ```
+
+Common targets:
+- `x86_64-unknown-linux-gnu` (64-bit Linux)
+- `aarch64-unknown-linux-gnu` (64-bit ARM Linux)
+- `x86_64-pc-windows-msvc` (64-bit Windows)
+
 ## License
 
 This project is licensed under the terms of the license found in the `netperf` directory (based on the original netperf license).
