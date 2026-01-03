@@ -843,3 +843,150 @@ pub fn parse_optionspec(s: &str) -> (Option<u64>, Option<u64>) {
         (val, None)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_netperf_request_serialization() {
+        let mut req = NetperfRequest::default();
+        req.request_type = 42;
+        req.dummy = 123;
+        req.test_specific_data[0] = 7;
+        req.test_specific_data[MAXSPECDATA - 1] = 999;
+
+        let bytes = req.to_bytes();
+        let recovered = NetperfRequest::from_bytes(&bytes);
+
+        assert_eq!(recovered.request_type, 42);
+        assert_eq!(recovered.dummy, 123);
+        assert_eq!(recovered.test_specific_data[0], 7);
+        assert_eq!(recovered.test_specific_data[MAXSPECDATA - 1], 999);
+    }
+
+    #[test]
+    fn test_netperf_response_serialization() {
+        let mut res = NetperfResponse::default();
+        res.response_type = 11;
+        res.serv_errno = 0;
+        res.test_specific_data[5] = 456;
+
+        let bytes = res.to_bytes();
+        let recovered = NetperfResponse::from_bytes(&bytes);
+
+        assert_eq!(recovered.response_type, 11);
+        assert_eq!(recovered.serv_errno, 0);
+        assert_eq!(recovered.test_specific_data[5], 456);
+    }
+
+    #[test]
+    fn test_tcp_stream_request_spec_data() {
+        let req = TcpStreamRequest {
+            send_buf_size: 16384,
+            recv_buf_size: 32768,
+            receive_size: 4096,
+            no_delay: 1,
+            cpu_rate: 1.5,
+            test_length: 10,
+            port: 12865,
+            ipfamily: NF_INET,
+            ..Default::default()
+        };
+
+        let data = req.to_spec_data();
+        let recovered = TcpStreamRequest::from_spec_data(&data);
+
+        assert_eq!(recovered.send_buf_size, 16384);
+        assert_eq!(recovered.recv_buf_size, 32768);
+        assert_eq!(recovered.receive_size, 4096);
+        assert_eq!(recovered.no_delay, 1);
+        assert_eq!(recovered.cpu_rate, 1.5);
+        assert_eq!(recovered.test_length, 10);
+        assert_eq!(recovered.port, 12865);
+        assert_eq!(recovered.ipfamily, NF_INET);
+    }
+
+    #[test]
+    fn test_tcp_stream_results_spec_data() {
+        let res = TcpStreamResults {
+            bytes_received: 1234567.0,
+            recv_calls: 100,
+            elapsed_time: 10.5,
+            cpu_util: 5.0,
+            serv_dem: 0.1,
+            num_cpus: 4,
+            ..Default::default()
+        };
+
+        let data = res.to_spec_data();
+        let recovered = TcpStreamResults::from_spec_data(&data);
+
+        assert_eq!(recovered.bytes_received, 1234567.0);
+        assert_eq!(recovered.recv_calls, 100);
+        assert_eq!(recovered.elapsed_time, 10.5);
+        assert_eq!(recovered.cpu_util, 5.0);
+        assert_eq!(recovered.serv_dem, 0.1);
+        assert_eq!(recovered.num_cpus, 4);
+    }
+
+    #[test]
+    fn test_tcp_rr_request_spec_data() {
+        let req = TcpRrRequest {
+            request_size: 1024,
+            response_size: 512,
+            test_length: 60,
+            ..Default::default()
+        };
+
+        let data = req.to_spec_data();
+        let recovered = TcpRrRequest::from_spec_data(&data);
+
+        assert_eq!(recovered.request_size, 1024);
+        assert_eq!(recovered.response_size, 512);
+        assert_eq!(recovered.test_length, 60);
+    }
+
+    #[test]
+    fn test_udp_stream_request_spec_data() {
+        let req = UdpStreamRequest {
+            message_size: 1472,
+            test_length: 30,
+            ..Default::default()
+        };
+
+        let data = req.to_spec_data();
+        let recovered = UdpStreamRequest::from_spec_data(&data);
+
+        assert_eq!(recovered.message_size, 1472);
+        assert_eq!(recovered.test_length, 30);
+    }
+
+    #[test]
+    fn test_parse_units() {
+        assert_eq!(parse_units("1024"), Some(1024));
+        assert_eq!(parse_units("1K"), Some(1024));
+        assert_eq!(parse_units("1M"), Some(1024 * 1024));
+        assert_eq!(parse_units("1G"), Some(1024 * 1024 * 1024));
+        assert_eq!(parse_units("1k"), Some(1000 / 8));
+        assert_eq!(parse_units("1m"), Some(1000000 / 8));
+        assert_eq!(parse_units("1g"), Some(1000000000 / 8));
+        assert_eq!(parse_units("invalid"), None);
+    }
+
+    #[test]
+    fn test_parse_sizespec() {
+        assert_eq!(parse_sizespec("1024"), (Some(1024), Some(1024)));
+        assert_eq!(parse_sizespec("1024,2048"), (Some(1024), Some(2048)));
+        assert_eq!(parse_sizespec("1024,"), (Some(1024), None));
+        assert_eq!(parse_sizespec(",2048"), (None, Some(2048)));
+    }
+
+    #[test]
+    fn test_parse_optionspec() {
+        assert_eq!(parse_optionspec("1024"), (Some(1024), None));
+        assert_eq!(parse_optionspec("1024,2048"), (Some(1024), Some(2048)));
+        assert_eq!(parse_optionspec("1024,"), (Some(1024), None));
+        assert_eq!(parse_optionspec(",2048"), (None, Some(2048)));
+    }
+}

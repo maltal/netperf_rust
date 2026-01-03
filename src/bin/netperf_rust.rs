@@ -111,7 +111,7 @@ fn parse_args(args: Vec<String>) -> Option<TestOptions> {
                 } else { i += 1; }
             }
             "-V" => {
-                println!("rust_netperf version 0.1.0 (parity with netperf 2.6.0)");
+                println!("rust_netperf version 0.1.1 (parity with netperf 2.6.0)");
                 return None;
             }
             "-h" | "--help" => {
@@ -124,6 +124,11 @@ fn parse_args(args: Vec<String>) -> Option<TestOptions> {
                 return None;
             }
         }
+    }
+
+    // Adjust defaults based on test type
+    if test_type.starts_with("UDP") {
+        msg_size = 1024;
     }
 
     // Parse test-specific args
@@ -433,7 +438,10 @@ fn run_udp_stream(opts: &TestOptions) -> std::io::Result<()> {
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_nanos(100));
             }
-            Err(_) => break,
+            Err(e) => {
+                eprintln!("UDP send error: {}", e);
+                break;
+            }
         }
     }
 
@@ -770,4 +778,41 @@ fn run_tcp_cc(opts: &TestOptions) -> std::io::Result<()> {
     println!("Elapsed time: {:.2} s", results.elapsed_time);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_args_global() {
+        let args = vec!["netperf_rust".to_string(), "-H".to_string(), "1.2.3.4".to_string(), "-l".to_string(), "5".to_string()];
+        let opts = parse_args(args).unwrap();
+        assert_eq!(opts.host, "1.2.3.4");
+        assert_eq!(opts.duration, 5);
+        assert_eq!(opts.test_type, "TCP_STREAM");
+    }
+
+    #[test]
+    fn test_parse_args_test_specific() {
+        let args = vec!["netperf_rust".to_string(), "-t".to_string(), "TCP_RR".to_string(), "--".to_string(), "-r".to_string(), "100,200".to_string()];
+        let opts = parse_args(args).unwrap();
+        assert_eq!(opts.test_type, "TCP_RR");
+        assert_eq!(opts.request_size, 100);
+        assert_eq!(opts.response_size, 200);
+    }
+
+    #[test]
+    fn test_parse_args_units() {
+        let args = vec!["netperf_rust".to_string(), "--".to_string(), "-m".to_string(), "1M".to_string()];
+        let opts = parse_args(args).unwrap();
+        assert_eq!(opts.msg_size, 1024 * 1024);
+    }
+
+    #[test]
+    fn test_parse_args_ipv6() {
+        let args = vec!["netperf_rust".to_string(), "-6".to_string()];
+        let opts = parse_args(args).unwrap();
+        assert_eq!(opts.ipfamily, NF_INET6);
+    }
 }

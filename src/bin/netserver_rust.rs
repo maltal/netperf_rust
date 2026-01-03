@@ -79,7 +79,7 @@ fn parse_args(args: Vec<String>) -> Option<u16> {
                 } else { i += 1; }
             }
             "-V" => {
-                println!("netserver_rust version 0.1.0");
+                println!("netserver_rust version 0.1.1");
                 return None;
             }
             "-h" | "--help" => {
@@ -328,8 +328,11 @@ fn handle_tcp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
 fn handle_udp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::io::Result<()> {
     let udp_req = UdpStreamRequest::from_spec_data(&req.test_specific_data);
 
-    let local_addr = control_stream.local_addr()?;
-    let bind_addr = SocketAddr::new(local_addr.ip(), 0);
+    let bind_addr = if udp_req.ipfamily == NF_INET6 { 
+        "[::]:0" 
+    } else { 
+        "0.0.0.0:0" 
+    };
     let udp_socket = UdpSocket::bind(bind_addr)?;
     apply_udp_options(&udp_socket, 0, udp_req.recv_buf_size)?;
     let data_port = udp_socket.local_addr()?.port();
@@ -396,8 +399,11 @@ fn handle_udp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
 fn handle_udp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::io::Result<()> {
     let udp_req = UdpRrRequest::from_spec_data(&req.test_specific_data);
 
-    let local_addr = control_stream.local_addr()?;
-    let bind_addr = SocketAddr::new(local_addr.ip(), 0);
+    let bind_addr = if udp_req.ipfamily == NF_INET6 { 
+        "[::]:0" 
+    } else { 
+        "0.0.0.0:0" 
+    };
     let udp_socket = UdpSocket::bind(bind_addr)?;
     apply_udp_options(&udp_socket, udp_req.send_buf_size, udp_req.recv_buf_size)?;
     let data_port = udp_socket.local_addr()?.port();
@@ -734,5 +740,33 @@ mod tests {
             // IPv6 might not be supported in all environments, so we don't necessarily fail here
             eprintln!("Skipping IPv6 test as it's not supported");
         }
+    }
+
+    #[test]
+    fn test_parse_args_default() {
+        let args = vec!["netserver_rust".to_string()];
+        let port = parse_args(args).unwrap();
+        assert_eq!(port, NETPERF_PORT);
+    }
+
+    #[test]
+    fn test_parse_args_custom_port() {
+        let args = vec!["netserver_rust".to_string(), "-p".to_string(), "12345".to_string()];
+        let port = parse_args(args).unwrap();
+        assert_eq!(port, 12345);
+    }
+
+    #[test]
+    fn test_parse_args_invalid() {
+        let args = vec!["netserver_rust".to_string(), "-invalid".to_string()];
+        let port = parse_args(args);
+        assert!(port.is_none());
+    }
+
+    #[test]
+    fn test_parse_args_help() {
+        let args = vec!["netserver_rust".to_string(), "--help".to_string()];
+        let port = parse_args(args);
+        assert!(port.is_none());
     }
 }
