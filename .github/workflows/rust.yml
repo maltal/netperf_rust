@@ -38,6 +38,7 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
       with:
         targets: ${{ matrix.target }}
+        components: rustfmt
 
     - name: Rust Cache
       uses: Swatinem/rust-cache@v2
@@ -48,6 +49,9 @@ jobs:
         # Additional keys for the cache key, separated by a newline.
         # default: ""
         key: ${{ matrix.target }}
+
+    - name: Check formatting
+      run: cargo fmt --all -- --check
 
     - name: Build
       run: cargo build --verbose --target ${{ matrix.target }}

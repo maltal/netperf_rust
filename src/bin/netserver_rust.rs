@@ -1,10 +1,10 @@
 use netperf_rust::*;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream, UdpSocket, SocketAddr};
-use std::time::{Duration, Instant};
-use std::thread;
+use socket2::{Domain, Protocol, Socket, Type};
 use std::env;
-use socket2::{Socket, Domain, Type, Protocol};
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use std::sync::{Arc, Mutex};
 
@@ -20,8 +20,7 @@ fn main() -> std::io::Result<()> {
     let addr_v6: SocketAddr = format!("[::]:{}", port).parse().unwrap();
     let addr_v4: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
 
-    let listener = create_listener(addr_v6)
-        .or_else(|_| create_listener(addr_v4))?;
+    let listener = create_listener(addr_v6).or_else(|_| create_listener(addr_v4))?;
 
     println!("Netserver listening on {}", listener.local_addr()?);
 
@@ -41,7 +40,7 @@ fn main() -> std::io::Result<()> {
                     }
                     *count += 1;
                 }
-                
+
                 thread::spawn(move || {
                     if let Err(e) = handle_client(&mut stream) {
                         eprintln!("Error handling client: {}", e);
@@ -62,7 +61,10 @@ fn main() -> std::io::Result<()> {
 fn print_usage() {
     println!("Usage: netserver_rust [options]");
     println!("Options:");
-    println!("  -p <port>   Port to listen on (default: {})", NETPERF_PORT);
+    println!(
+        "  -p <port>   Port to listen on (default: {})",
+        NETPERF_PORT
+    );
     println!("  -V          Print version");
     println!("  -h, --help  Print this help message");
 }
@@ -76,7 +78,9 @@ fn parse_args(args: Vec<String>) -> Option<u16> {
                 if i + 1 < args.len() {
                     port = args[i + 1].parse().unwrap_or(NETPERF_PORT);
                     i += 2;
-                } else { i += 1; }
+                } else {
+                    i += 1;
+                }
             }
             "-V" => {
                 println!("netserver_rust version 0.1.1");
@@ -147,7 +151,6 @@ fn handle_client(stream: &mut TcpStream) -> std::io::Result<()> {
     }
 }
 
-
 fn handle_tcp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::io::Result<()> {
     let tcp_req = TcpStreamRequest::from_spec_data(&req.test_specific_data);
 
@@ -165,24 +168,29 @@ fn handle_tcp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
     tcp_res.recv_buf_size = tcp_req.recv_buf_size;
     tcp_res.send_buf_size = tcp_req.send_buf_size;
     tcp_res.no_delay = tcp_req.no_delay;
-    
+
     res.test_specific_data = tcp_res.to_spec_data();
 
     send_response(control_stream, &res)?;
 
     // Accept data connection
     let (mut data_stream, _) = data_listener.accept()?;
-    apply_tcp_options(&data_stream, tcp_req.send_buf_size, tcp_req.recv_buf_size, tcp_req.no_delay)?;
-    
+    apply_tcp_options(
+        &data_stream,
+        tcp_req.send_buf_size,
+        tcp_req.recv_buf_size,
+        tcp_req.no_delay,
+    )?;
+
     let start = Instant::now();
     let mut bytes_received = 0u64;
     let mut recv_calls = 0u32;
-    
+
     // Security: implement upper bounds for memory allocations
-    let buf_size = if tcp_req.receive_size > 0 && tcp_req.receive_size <= 1024 * 1024 { 
-        tcp_req.receive_size as usize 
-    } else { 
-        32768 
+    let buf_size = if tcp_req.receive_size > 0 && tcp_req.receive_size <= 1024 * 1024 {
+        tcp_req.receive_size as usize
+    } else {
+        32768
     };
     let mut buf = vec![0u8; buf_size];
 
@@ -201,15 +209,21 @@ fn handle_tcp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
                 bytes_received += n as u64;
                 recv_calls += 1;
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
                 continue;
             }
             Err(e) => return Err(e),
         }
     }
-    
+
     let elapsed = start.elapsed().as_secs_f32();
-    println!("Server: received {} bytes in {:.2}s", bytes_received, elapsed);
+    println!(
+        "Server: received {} bytes in {:.2}s",
+        bytes_received, elapsed
+    );
 
     // Send results
     let _result_req = match recv_request(control_stream) {
@@ -221,11 +235,11 @@ fn handle_tcp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
     results.bytes_received = bytes_received as f64;
     results.recv_calls = recv_calls;
     results.elapsed_time = elapsed;
-    
+
     let mut res_final = NetperfResponse::default();
     res_final.response_type = TCP_STREAM_RESULTS;
     res_final.test_specific_data = results.to_spec_data();
-    
+
     send_response(control_stream, &res_final)?;
 
     Ok(())
@@ -247,17 +261,22 @@ fn handle_tcp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
     tcp_res.recv_buf_size = tcp_req.recv_buf_size;
     tcp_res.send_buf_size = tcp_req.send_buf_size;
     tcp_res.no_delay = tcp_req.no_delay;
-    
+
     res.test_specific_data = tcp_res.to_spec_data();
 
     send_response(control_stream, &res)?;
 
     let (mut data_stream, _) = data_listener.accept()?;
-    apply_tcp_options(&data_stream, tcp_req.send_buf_size, tcp_req.recv_buf_size, tcp_req.no_delay)?;
-    
+    apply_tcp_options(
+        &data_stream,
+        tcp_req.send_buf_size,
+        tcp_req.recv_buf_size,
+        tcp_req.no_delay,
+    )?;
+
     let start = Instant::now();
     let mut trans_received = 0u32;
-    
+
     // Security: Input validation
     let req_size = if tcp_req.request_size > 0 && tcp_req.request_size <= 1024 * 1024 {
         tcp_req.request_size as usize
@@ -269,7 +288,7 @@ fn handle_tcp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
     } else {
         1
     };
-    
+
     let mut buf = vec![0u8; std::cmp::max(req_size, res_size)];
 
     let test_duration = if tcp_req.test_length > 0 && tcp_req.test_length < 3600 {
@@ -289,7 +308,9 @@ fn handle_tcp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
                 Err(_) => break,
             }
         }
-        if read < req_size { break; }
+        if read < req_size {
+            break;
+        }
 
         // Send response
         if let Err(_) = data_stream.write_all(&buf[..res_size]) {
@@ -297,7 +318,7 @@ fn handle_tcp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
         }
         trans_received += 1;
     }
-    
+
     let elapsed = start.elapsed().as_secs_f32();
 
     let _result_req = match recv_request(control_stream) {
@@ -308,11 +329,11 @@ fn handle_tcp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
     let mut results = TcpRrResults::default();
     results.trans_received = trans_received;
     results.elapsed_time = elapsed;
-    
+
     let mut res_final = NetperfResponse::default();
     res_final.response_type = TCP_RR_RESULTS;
     res_final.test_specific_data = results.to_spec_data();
-    
+
     send_response(control_stream, &res_final)?;
 
     Ok(())
@@ -321,10 +342,10 @@ fn handle_tcp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
 fn handle_udp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::io::Result<()> {
     let udp_req = UdpStreamRequest::from_spec_data(&req.test_specific_data);
 
-    let bind_addr = if udp_req.ipfamily == NF_INET6 { 
-        "[::]:0" 
-    } else { 
-        "0.0.0.0:0" 
+    let bind_addr = if udp_req.ipfamily == NF_INET6 {
+        "[::]:0"
+    } else {
+        "0.0.0.0:0"
     };
     let udp_socket = UdpSocket::bind(bind_addr)?;
     apply_udp_options(&udp_socket, 0, udp_req.recv_buf_size)?;
@@ -336,7 +357,7 @@ fn handle_udp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
     udp_res.data_port_number = data_port as i32;
     udp_res.test_length = udp_req.test_length;
     udp_res.recv_buf_size = udp_req.recv_buf_size;
-    
+
     res.test_specific_data = udp_res.to_spec_data();
 
     send_response(control_stream, &res)?;
@@ -360,15 +381,21 @@ fn handle_udp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
                 bytes_received += n as u64;
                 messages_recvd += 1;
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
                 continue;
             }
             Err(e) => return Err(e),
         }
     }
-    
+
     let elapsed = start.elapsed().as_secs_f32();
-    println!("Server: UDP received {} bytes in {:.2}s", bytes_received, elapsed);
+    println!(
+        "Server: UDP received {} bytes in {:.2}s",
+        bytes_received, elapsed
+    );
 
     let _result_req = match recv_request(control_stream) {
         Ok(req) => req,
@@ -379,11 +406,11 @@ fn handle_udp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
     results.bytes_received = bytes_received as u32;
     results.messages_recvd = messages_recvd;
     results.elapsed_time = elapsed;
-    
+
     let mut res_final = NetperfResponse::default();
     res_final.response_type = UDP_STREAM_RESULTS;
     res_final.test_specific_data = results.to_spec_data();
-    
+
     send_response(control_stream, &res_final)?;
 
     Ok(())
@@ -392,10 +419,10 @@ fn handle_udp_stream(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
 fn handle_udp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::io::Result<()> {
     let udp_req = UdpRrRequest::from_spec_data(&req.test_specific_data);
 
-    let bind_addr = if udp_req.ipfamily == NF_INET6 { 
-        "[::]:0" 
-    } else { 
-        "0.0.0.0:0" 
+    let bind_addr = if udp_req.ipfamily == NF_INET6 {
+        "[::]:0"
+    } else {
+        "0.0.0.0:0"
     };
     let udp_socket = UdpSocket::bind(bind_addr)?;
     apply_udp_options(&udp_socket, udp_req.send_buf_size, udp_req.recv_buf_size)?;
@@ -409,14 +436,14 @@ fn handle_udp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
     udp_res.recv_buf_size = udp_req.recv_buf_size;
     udp_res.send_buf_size = udp_req.send_buf_size;
     udp_res.no_delay = udp_req.no_delay;
-    
+
     res.test_specific_data = udp_res.to_spec_data();
 
     send_response(control_stream, &res)?;
 
     let start = Instant::now();
     let mut trans_received = 0u32;
-    
+
     // Security: Input validation
     let req_size = if udp_req.request_size > 0 && udp_req.request_size <= 65535 {
         udp_req.request_size as usize
@@ -450,13 +477,16 @@ fn handle_udp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
                     trans_received += 1;
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
                 continue;
             }
             Err(_) => break,
         }
     }
-    
+
     let elapsed = start.elapsed().as_secs_f32();
 
     let _result_req = match recv_request(control_stream) {
@@ -467,11 +497,11 @@ fn handle_udp_rr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
     let mut results = UdpRrResults::default();
     results.trans_received = trans_received;
     results.elapsed_time = elapsed;
-    
+
     let mut res_final = NetperfResponse::default();
     res_final.response_type = UDP_RR_RESULTS;
     res_final.test_specific_data = results.to_spec_data();
-    
+
     send_response(control_stream, &res_final)?;
 
     Ok(())
@@ -493,23 +523,28 @@ fn handle_tcp_maerts(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
     tcp_res.recv_buf_size = tcp_req.recv_buf_size;
     tcp_res.send_buf_size = tcp_req.send_buf_size;
     tcp_res.no_delay = tcp_req.no_delay;
-    
+
     res.test_specific_data = tcp_res.to_spec_data();
 
     send_response(control_stream, &res)?;
 
     let (mut data_stream, _) = data_listener.accept()?;
-    apply_tcp_options(&data_stream, tcp_req.send_buf_size, tcp_req.recv_buf_size, tcp_req.no_delay)?;
-    
+    apply_tcp_options(
+        &data_stream,
+        tcp_req.send_buf_size,
+        tcp_req.recv_buf_size,
+        tcp_req.no_delay,
+    )?;
+
     let start = Instant::now();
     let mut bytes_sent = 0u64;
     let mut send_calls = 0u32;
-    
+
     // Security: implement upper bounds for memory allocations
-    let buf_size = if tcp_req.receive_size > 0 && tcp_req.receive_size <= 1024 * 1024 { 
-        tcp_req.receive_size as usize 
-    } else { 
-        32768 
+    let buf_size = if tcp_req.receive_size > 0 && tcp_req.receive_size <= 1024 * 1024 {
+        tcp_req.receive_size as usize
+    } else {
+        32768
     };
     let buf = vec![0u8; buf_size];
 
@@ -529,7 +564,7 @@ fn handle_tcp_maerts(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
             Err(_) => break,
         }
     }
-    
+
     let elapsed = start.elapsed().as_secs_f32();
 
     let _result_req = match recv_request(control_stream) {
@@ -541,11 +576,11 @@ fn handle_tcp_maerts(control_stream: &mut TcpStream, req: &NetperfRequest) -> st
     results.bytes_received = bytes_sent as f64;
     results.recv_calls = send_calls;
     results.elapsed_time = elapsed;
-    
+
     let mut res_final = NetperfResponse::default();
     res_final.response_type = TCP_MAERTS_RESULTS;
     res_final.test_specific_data = results.to_spec_data();
-    
+
     send_response(control_stream, &res_final)?;
 
     Ok(())
@@ -568,14 +603,14 @@ fn handle_tcp_crr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::
     tcp_res.recv_buf_size = tcp_req.recv_buf_size;
     tcp_res.send_buf_size = tcp_req.send_buf_size;
     tcp_res.no_delay = tcp_req.no_delay;
-    
+
     res.test_specific_data = tcp_res.to_spec_data();
 
     send_response(control_stream, &res)?;
 
     let start = Instant::now();
     let mut trans_received = 0u32;
-    
+
     // Security: Input validation
     let req_size = if tcp_req.request_size > 0 && tcp_req.request_size <= 1024 * 1024 {
         tcp_req.request_size as usize
@@ -605,7 +640,12 @@ fn handle_tcp_crr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::
             }
             Err(_) => break,
         };
-        let _ = apply_tcp_options(&data_stream, tcp_req.send_buf_size, tcp_req.recv_buf_size, tcp_req.no_delay);
+        let _ = apply_tcp_options(
+            &data_stream,
+            tcp_req.send_buf_size,
+            tcp_req.recv_buf_size,
+            tcp_req.no_delay,
+        );
 
         // Read request
         let mut read = 0;
@@ -617,7 +657,7 @@ fn handle_tcp_crr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::
                 Err(_) => break,
             }
         }
-        
+
         if read == req_size {
             // Send response
             if let Ok(_) = data_stream.write_all(&buf[..res_size]) {
@@ -626,7 +666,7 @@ fn handle_tcp_crr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::
         }
         // Connection closed after one transaction in CRR
     }
-    
+
     let elapsed = start.elapsed().as_secs_f32();
 
     let _result_req = match recv_request(control_stream) {
@@ -637,11 +677,11 @@ fn handle_tcp_crr(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::
     let mut results = TcpRrResults::default();
     results.trans_received = trans_received;
     results.elapsed_time = elapsed;
-    
+
     let mut res_final = NetperfResponse::default();
     res_final.response_type = TCP_CRR_RESULTS;
     res_final.test_specific_data = results.to_spec_data();
-    
+
     send_response(control_stream, &res_final)?;
 
     Ok(())
@@ -664,7 +704,7 @@ fn handle_tcp_cc(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
     tcp_res.recv_buf_size = tcp_req.recv_buf_size;
     tcp_res.send_buf_size = tcp_req.send_buf_size;
     tcp_res.no_delay = tcp_req.no_delay;
-    
+
     res.test_specific_data = tcp_res.to_spec_data();
 
     send_response(control_stream, &res)?;
@@ -688,11 +728,16 @@ fn handle_tcp_cc(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
             }
             Err(_) => break,
         };
-        let _ = apply_tcp_options(&data_stream, tcp_req.send_buf_size, tcp_req.recv_buf_size, tcp_req.no_delay);
+        let _ = apply_tcp_options(
+            &data_stream,
+            tcp_req.send_buf_size,
+            tcp_req.recv_buf_size,
+            tcp_req.no_delay,
+        );
         drop(data_stream);
         trans_received += 1;
     }
-    
+
     let elapsed = start.elapsed().as_secs_f32();
 
     // Send results
@@ -701,11 +746,11 @@ fn handle_tcp_cc(control_stream: &mut TcpStream, req: &NetperfRequest) -> std::i
     let mut results = TcpCcResults::default();
     results.trans_received = trans_received;
     results.elapsed_time = elapsed;
-    
+
     let mut res_final = NetperfResponse::default();
     res_final.response_type = TCP_CC_RESULTS;
     res_final.test_specific_data = results.to_spec_data();
-    
+
     send_response(control_stream, &res_final)?;
 
     Ok(())
@@ -728,7 +773,7 @@ mod tests {
         // Test binding to an ephemeral port on [::1]
         let addr: SocketAddr = "[::1]:0".parse().unwrap();
         if let Ok(listener) = create_listener(addr) {
-             assert!(listener.local_addr().unwrap().port() > 0);
+            assert!(listener.local_addr().unwrap().port() > 0);
         } else {
             // IPv6 might not be supported in all environments, so we don't necessarily fail here
             eprintln!("Skipping IPv6 test as it's not supported");
@@ -744,7 +789,11 @@ mod tests {
 
     #[test]
     fn test_parse_args_custom_port() {
-        let args = vec!["netserver_rust".to_string(), "-p".to_string(), "12345".to_string()];
+        let args = vec![
+            "netserver_rust".to_string(),
+            "-p".to_string(),
+            "12345".to_string(),
+        ];
         let port = parse_args(args).unwrap();
         assert_eq!(port, 12345);
     }

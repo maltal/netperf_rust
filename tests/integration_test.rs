@@ -1,8 +1,8 @@
-use std::process::{Command, Child};
+use std::net::TcpStream;
+use std::process::{Child, Command};
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use std::net::TcpStream;
-use std::sync::Mutex;
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -62,8 +62,13 @@ fn run_netperf(args: &[&str]) {
         .args(args)
         .output()
         .expect("Failed to run netperf");
-    
-    assert!(output.status.success(), "netperf failed with args {:?}: {}", args, String::from_utf8_lossy(&output.stderr));
+
+    assert!(
+        output.status.success(),
+        "netperf failed with args {:?}: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -93,7 +98,19 @@ fn test_tcp_rr_options() {
         Err(e) => e.into_inner(),
     };
     let _server = NetserverRust::start();
-    run_netperf(&["-H", "localhost", "-l", "1", "-t", "TCP_RR", "-s", "65536", "-S", "65536", "-D"]);
+    run_netperf(&[
+        "-H",
+        "localhost",
+        "-l",
+        "1",
+        "-t",
+        "TCP_RR",
+        "-s",
+        "65536",
+        "-S",
+        "65536",
+        "-D",
+    ]);
 }
 
 #[test]

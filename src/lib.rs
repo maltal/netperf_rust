@@ -1,7 +1,7 @@
+use socket2::SockRef;
 use std::io::{Read, Write};
 use std::net::{TcpStream, UdpSocket};
 use std::os::raw::c_int;
-use socket2::SockRef;
 
 pub const MAXSPECDATA: usize = 162;
 pub const NETPERF_PORT: u16 = 12865;
@@ -213,7 +213,6 @@ pub struct UdpStreamResults {
     pub num_cpus: c_int,
 }
 
-
 pub type TcpCcRequest = TcpRrRequest;
 pub type TcpCcResponse = TcpRrResponse;
 pub type TcpCcResults = TcpRrResults;
@@ -221,7 +220,12 @@ pub type UdpRrRequest = TcpRrRequest;
 pub type UdpRrResponse = TcpRrResponse;
 pub type UdpRrResults = TcpRrResults;
 
-pub fn apply_tcp_options(stream: &TcpStream, send_buf: i32, recv_buf: i32, no_delay: i32) -> std::io::Result<()> {
+pub fn apply_tcp_options(
+    stream: &TcpStream,
+    send_buf: i32,
+    recv_buf: i32,
+    no_delay: i32,
+) -> std::io::Result<()> {
     let sock = SockRef::from(stream);
     if send_buf > 0 {
         let _ = sock.set_send_buffer_size(send_buf as usize);
@@ -262,7 +266,8 @@ impl NetperfRequest {
         req.request_type = i32::from_be_bytes(buf[0..4].try_into().unwrap());
         req.dummy = i32::from_be_bytes(buf[4..8].try_into().unwrap());
         for i in 0..MAXSPECDATA {
-            req.test_specific_data[i] = i32::from_be_bytes(buf[8 + i * 4..12 + i * 4].try_into().unwrap());
+            req.test_specific_data[i] =
+                i32::from_be_bytes(buf[8 + i * 4..12 + i * 4].try_into().unwrap());
         }
         req
     }
@@ -284,7 +289,8 @@ impl NetperfResponse {
         res.response_type = i32::from_be_bytes(buf[0..4].try_into().unwrap());
         res.serv_errno = i32::from_be_bytes(buf[4..8].try_into().unwrap());
         for i in 0..MAXSPECDATA {
-            res.test_specific_data[i] = i32::from_be_bytes(buf[8 + i * 4..12 + i * 4].try_into().unwrap());
+            res.test_specific_data[i] =
+                i32::from_be_bytes(buf[8 + i * 4..12 + i * 4].try_into().unwrap());
         }
         res
     }
@@ -591,7 +597,6 @@ impl UdpStreamResults {
     }
 }
 
-
 pub fn send_request(stream: &mut TcpStream, req: &NetperfRequest) -> std::io::Result<()> {
     stream.write_all(&req.to_bytes())
 }
@@ -668,9 +673,9 @@ pub fn parse_units(s: &str) -> Option<u64> {
 
     num_str.parse::<u64>().ok().map(|n| {
         if last_char == 'k' || last_char == 'm' || last_char == 'g' {
-             n * multiplier / 8 // bits to bytes
+            n * multiplier / 8 // bits to bytes
         } else {
-             n * multiplier
+            n * multiplier
         }
     })
 }
@@ -678,8 +683,16 @@ pub fn parse_units(s: &str) -> Option<u64> {
 pub fn parse_sizespec(s: &str) -> (Option<u64>, Option<u64>) {
     if s.contains(',') {
         let parts: Vec<&str> = s.split(',').collect();
-        let p1 = if !parts[0].is_empty() { parse_units(parts[0]) } else { None };
-        let p2 = if parts.len() > 1 && !parts[1].is_empty() { parse_units(parts[1]) } else { None };
+        let p1 = if !parts[0].is_empty() {
+            parse_units(parts[0])
+        } else {
+            None
+        };
+        let p2 = if parts.len() > 1 && !parts[1].is_empty() {
+            parse_units(parts[1])
+        } else {
+            None
+        };
         (p1, p2)
     } else {
         let val = parse_units(s);
@@ -690,8 +703,16 @@ pub fn parse_sizespec(s: &str) -> (Option<u64>, Option<u64>) {
 pub fn parse_optionspec(s: &str) -> (Option<u64>, Option<u64>) {
     if s.contains(',') {
         let parts: Vec<&str> = s.split(',').collect();
-        let p1 = if !parts[0].is_empty() { parse_units(parts[0]) } else { None };
-        let p2 = if parts.len() > 1 && !parts[1].is_empty() { parse_units(parts[1]) } else { None };
+        let p1 = if !parts[0].is_empty() {
+            parse_units(parts[0])
+        } else {
+            None
+        };
+        let p2 = if parts.len() > 1 && !parts[1].is_empty() {
+            parse_units(parts[1])
+        } else {
+            None
+        };
         (p1, p2)
     } else {
         let val = parse_units(s);
