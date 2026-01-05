@@ -56,3 +56,14 @@ jobs:
       # Skip tests on windows-aarch64 because windows-latest is x86_64 and cannot run aarch64 binaries natively
       if: matrix.target != 'aarch64-pc-windows-msvc'
       run: cargo test --verbose --target ${{ matrix.target }}
+
+    - name: Upload binaries
+      uses: actions/upload-artifact@v4
+      with:
+        name: netperf-rust-${{ matrix.os }}-${{ matrix.arch }}
+        path: |
+          target/${{ matrix.target }}/debug/netperf_rust
+          target/${{ matrix.target }}/debug/netperf_rust.exe
+          target/${{ matrix.target }}/debug/netserver_rust
+          target/${{ matrix.target }}/debug/netserver_rust.exe
+        if-no-files-found: error
