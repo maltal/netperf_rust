@@ -6,21 +6,20 @@ use std::sync::Mutex;
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
-struct Netserver {
+struct NetserverRust {
     child: Child,
 }
 
-impl Netserver {
+impl NetserverRust {
     const BIND_PORT: u16 = 12865;
     const MAX_ATTEMPTS: usize = 40;
     const POLL_DELAY_MS: u64 = 250;
     const READY_GRACE_MS: u64 = 200;
-    const LOOPBACK_ADDRS: [&'static str; 2] = ["127.0.0.1", "[::1]"];
 
     fn wait_for_bind(child: &mut Child) {
         for _ in 0..Self::MAX_ATTEMPTS {
             if let Ok(Some(status)) = child.try_wait() {
-                panic!("Netserver exited early with status: {}", status);
+                panic!("Netserver_rust exited early with status: {}", status);
             }
 
             if Self::is_listening() {
@@ -32,36 +31,34 @@ impl Netserver {
         }
 
         let _ = child.kill();
-        panic!("Netserver failed to start after 10 seconds");
+        panic!("Netserver_rust failed to start after 10 seconds");
     }
 
     fn is_listening() -> bool {
-        Self::LOOPBACK_ADDRS.iter().any(|addr| {
-            TcpStream::connect(format!("{}:{}", addr, Self::BIND_PORT)).is_ok()
-        })
+        TcpStream::connect(format!("localhost:{}", Self::BIND_PORT)).is_ok()
     }
 
     fn start() -> Self {
-        let mut child = Command::new("./target/debug/netserver_rust")
+        let mut child = Command::new(env!("CARGO_BIN_EXE_netserver_rust"))
             .spawn()
-            .expect("Failed to start netserver");
+            .expect("Failed to start netserver_rust");
 
         Self::wait_for_bind(&mut child);
-        Netserver { child }
+        NetserverRust { child }
     }
 }
 
-impl Drop for Netserver {
+impl Drop for NetserverRust {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
         // Give some time for the OS to release ports
-        thread::sleep(Duration::from_millis(500));
+        thread::sleep(Duration::from_millis(100));
     }
 }
 
 fn run_netperf(args: &[&str]) {
-    let output = Command::new("./target/debug/netperf_rust")
+    let output = Command::new(env!("CARGO_BIN_EXE_netperf_rust"))
         .args(args)
         .output()
         .expect("Failed to run netperf");
@@ -75,8 +72,8 @@ fn test_tcp_stream_v4() {
         Ok(g) => g,
         Err(e) => e.into_inner(),
     };
-    let _server = Netserver::start();
-    run_netperf(&["-H", "127.0.0.1", "-l", "1", "-t", "TCP_STREAM"]);
+    let _server = NetserverRust::start();
+    run_netperf(&["-H", "localhost", "-l", "1", "-t", "TCP_STREAM"]);
 }
 
 #[test]
@@ -85,8 +82,8 @@ fn test_tcp_stream_v6() {
         Ok(g) => g,
         Err(e) => e.into_inner(),
     };
-    let _server = Netserver::start();
-    run_netperf(&["-H", "::1", "-6", "-l", "1", "-t", "TCP_STREAM"]);
+    let _server = NetserverRust::start();
+    run_netperf(&["-H", "localhost", "-6", "-l", "1", "-t", "TCP_STREAM"]);
 }
 
 #[test]
@@ -95,8 +92,8 @@ fn test_tcp_rr_options() {
         Ok(g) => g,
         Err(e) => e.into_inner(),
     };
-    let _server = Netserver::start();
-    run_netperf(&["-H", "127.0.0.1", "-l", "1", "-t", "TCP_RR", "-s", "65536", "-S", "65536", "-D"]);
+    let _server = NetserverRust::start();
+    run_netperf(&["-H", "localhost", "-l", "1", "-t", "TCP_RR", "-s", "65536", "-S", "65536", "-D"]);
 }
 
 #[test]
@@ -105,8 +102,8 @@ fn test_udp_stream() {
         Ok(g) => g,
         Err(e) => e.into_inner(),
     };
-    let _server = Netserver::start();
-    run_netperf(&["-H", "127.0.0.1", "-l", "1", "-t", "UDP_STREAM"]);
+    let _server = NetserverRust::start();
+    run_netperf(&["-H", "localhost", "-l", "1", "-t", "UDP_STREAM"]);
 }
 
 #[test]
@@ -115,6 +112,6 @@ fn test_tcp_cc() {
         Ok(g) => g,
         Err(e) => e.into_inner(),
     };
-    let _server = Netserver::start();
-    run_netperf(&["-H", "127.0.0.1", "-l", "1", "-t", "TCP_CC"]);
+    let _server = NetserverRust::start();
+    run_netperf(&["-H", "localhost", "-l", "1", "-t", "TCP_CC"]);
 }
